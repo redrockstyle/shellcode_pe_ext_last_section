@@ -196,12 +196,10 @@ local 	oldProtect:cword
     ;invoke LoadPeFile, ccx, addr [pe], 0
     
 ifdef _WIN64
-	; code for 64
-	mov cax, [cbx - 4]
+	mov cax, [cbx - sizeof(cword)]
 	jmp cax
 else
-	; code for 32
-	mov eax, [cbx - 4]
+	mov eax, [cbx - sizeof(cword)]
 	jmp eax
 	
 endif
@@ -441,8 +439,8 @@ ExtendLastSection proc CurrentStdcallNotation pe:cword, additionalSize:cword, rv
 	invoke AlignToTop, [newVirtualAndFileSize], [alignment]
 	mov cdx, cax
 	push cdx ; на 64 аргументы для функций портят rdx, rcx
-	mov cax, [lastSection]
 	
+	mov cax, [lastSection]
 	mov cax, cax
 	mov eax, [cax].IMAGE_SECTION_HEADER.Misc.VirtualSize
 	invoke AlignToTop, cax, [alignment]
@@ -452,6 +450,7 @@ ExtendLastSection proc CurrentStdcallNotation pe:cword, additionalSize:cword, rv
 	add cdx, 1000h ; чтоб VirtualProtect(addr,1000,...) в расширенном пространстве не попадал за пределы доступной памяти
 	invoke AlignToTop, cdx, [alignment]
 	mov cdx, cax
+	
 	mov cax, [pe]
 	mov cax, [cax].PeParser.nthead
 	lea cax, [cax].IMAGE_NT_HEADERS.OptionalHeader
